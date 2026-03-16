@@ -76,6 +76,7 @@ impl WhirR1CSSchemeBuilder for WhirR1CSScheme {
             num_challenges,
             whir_witness: Self::new_whir_zk_config_for_size(m_raw, 1, hash_id),
             has_public_inputs,
+            r1cs_hash: r1cs.hash(),
         }
     }
 
@@ -154,6 +155,7 @@ impl WhirR1CSSchemeBuilder for WhirR1CSScheme {
             w1_size,
             num_challenges,
             has_public_inputs,
+            r1cs_hash: [0u8; 32], // TODO: Mavros path needs r1cs_hash
         }
     }
 }
