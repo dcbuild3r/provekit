@@ -11,9 +11,7 @@ use {
     },
     acir::{
         circuit::{
-            opcodes::{
-                BlackBoxFuncCall, BlockType, ConstantOrWitnessEnum as ConstantOrACIRWitness,
-            },
+            opcodes::{BlackBoxFuncCall, BlockType, FunctionInput as ConstantOrACIRWitness},
             Circuit, Opcode,
         },
         native_types::{Expression, Witness as NoirWitness},
@@ -483,19 +481,8 @@ impl NoirToR1CSCompiler {
                     });
                     memory_blocks.insert(block_id, block);
                 }
-                Opcode::MemoryOp {
-                    block_id,
-                    op,
-                    predicate,
-                } => {
-                    // Panic if the predicate is set (according to Noir developers, predicate is
-                    // always None and will soon be removed).
-                    assert!(
-                        predicate.is_none(),
-                        "MemoryOp has unexpected predicate: {:?}",
-                        predicate
-                    );
-
+                Opcode::MemoryOp { block_id, op } => {
+                    // Note: predicate field was removed from MemoryOp in ACIR beta.19.
                     let block_id = block_id.0 as usize;
                     assert!(
                         memory_blocks.contains_key(&block_id),
@@ -540,10 +527,9 @@ impl NoirToR1CSCompiler {
                 Opcode::BlackBoxFuncCall(black_box_func_call) => match black_box_func_call {
                     BlackBoxFuncCall::RANGE {
                         input: function_input,
+                        num_bits,
                     } => {
-                        let input = function_input.input();
-                        let num_bits = function_input.num_bits();
-                        let input_witness = match input {
+                        let input_witness = match *function_input {
                             ConstantOrACIRWitness::Constant(_) => {
                                 panic!(
                                     "We should never be range-checking a constant value, as this \
@@ -555,7 +541,7 @@ impl NoirToR1CSCompiler {
                             }
                         };
                         range_checks
-                            .entry(num_bits)
+                            .entry(*num_bits)
                             .or_default()
                             .push(input_witness);
                     }
@@ -564,52 +550,31 @@ impl NoirToR1CSCompiler {
                     // The inputs and outputs will have already been solved for by the ACIR solver.
                     // We decompose into bytes using the actual bit width from the ACIR opcode
                     // and add byte-level ops to leverage the combined byte-level lookup table.
-                    BlackBoxFuncCall::AND { lhs, rhs, output } => {
-                        ensure!(
-                            lhs.num_bits() > 0,
-                            "AND operands must have nonzero bit width"
-                        );
-                        ensure!(
-                            lhs.num_bits() == rhs.num_bits(),
-                            "AND operands must have the same bit width, got {} and {}",
-                            lhs.num_bits(),
-                            rhs.num_bits()
-                        );
-                        self.process_binop_opcode(
-                            lhs.input(),
-                            rhs.input(),
-                            *output,
-                            lhs.num_bits(),
-                            &mut and_ops,
-                        );
-                    }
-                    BlackBoxFuncCall::XOR { lhs, rhs, output } => {
-                        ensure!(
-                            lhs.num_bits() > 0,
-                            "XOR operands must have nonzero bit width"
-                        );
-                        ensure!(
-                            lhs.num_bits() == rhs.num_bits(),
-                            "XOR operands must have the same bit width, got {} and {}",
-                            lhs.num_bits(),
-                            rhs.num_bits()
-                        );
-                        self.process_binop_opcode(
-                            lhs.input(),
-                            rhs.input(),
-                            *output,
-                            lhs.num_bits(),
-                            &mut xor_ops,
-                        );
-                    }
-                    BlackBoxFuncCall::Poseidon2Permutation {
-                        inputs,
-                        outputs,
-                        len,
+                    BlackBoxFuncCall::AND {
+                        lhs,
+                        rhs,
+                        output,
+                        num_bits,
                     } => {
-                        assert_eq!(inputs.len() as u32, *len, "Poseidon2: inputs.len != len");
-                        assert_eq!(outputs.len() as u32, *len, "Poseidon2: outputs.len != len");
-                        let t = *len;
+                        ensure!(*num_bits > 0, "AND operands must have nonzero bit width");
+                        self.process_binop_opcode(*lhs, *rhs, *output, *num_bits, &mut and_ops);
+                    }
+                    BlackBoxFuncCall::XOR {
+                        lhs,
+                        rhs,
+                        output,
+                        num_bits,
+                    } => {
+                        ensure!(*num_bits > 0, "XOR operands must have nonzero bit width");
+                        self.process_binop_opcode(*lhs, *rhs, *output, *num_bits, &mut xor_ops);
+                    }
+                    BlackBoxFuncCall::Poseidon2Permutation { inputs, outputs } => {
+                        assert_eq!(
+                            inputs.len(),
+                            outputs.len(),
+                            "Poseidon2: inputs.len != outputs.len"
+                        );
+                        let t = inputs.len() as u32;
 
                         // Only these widths are allowed for Poseidon2
                         assert!(
@@ -620,7 +585,7 @@ impl NoirToR1CSCompiler {
                         // Convert ACIR inputs to (Constant | Witness)
                         let in_wits: Vec<ConstantOrR1CSWitness> = inputs
                             .iter()
-                            .map(|inp| self.fetch_constant_or_r1cs_witness(inp.input()))
+                            .map(|inp| self.fetch_constant_or_r1cs_witness(*inp))
                             .collect();
                         let out_wits: Vec<usize> = outputs
                             .iter()
@@ -635,11 +600,11 @@ impl NoirToR1CSCompiler {
                     } => {
                         let input_witnesses: Vec<ConstantOrR1CSWitness> = inputs
                             .iter()
-                            .map(|input| self.fetch_constant_or_r1cs_witness(input.input()))
+                            .map(|input| self.fetch_constant_or_r1cs_witness(*input))
                             .collect();
                         let hash_witnesses: Vec<ConstantOrR1CSWitness> = hash_values
                             .iter()
-                            .map(|hv| self.fetch_constant_or_r1cs_witness(hv.input()))
+                            .map(|hv| self.fetch_constant_or_r1cs_witness(*hv))
                             .collect();
                         let output_witnesses: Vec<usize> = outputs
                             .iter()
@@ -654,15 +619,16 @@ impl NoirToR1CSCompiler {
                     BlackBoxFuncCall::MultiScalarMul {
                         points,
                         scalars,
+                        predicate: _,
                         outputs,
                     } => {
                         let point_wits: Vec<ConstantOrR1CSWitness> = points
                             .iter()
-                            .map(|inp| self.fetch_constant_or_r1cs_witness(inp.input()))
+                            .map(|inp| self.fetch_constant_or_r1cs_witness(*inp))
                             .collect();
                         let scalar_wits: Vec<ConstantOrR1CSWitness> = scalars
                             .iter()
-                            .map(|inp| self.fetch_constant_or_r1cs_witness(inp.input()))
+                            .map(|inp| self.fetch_constant_or_r1cs_witness(*inp))
                             .collect();
                         let out_x = self.fetch_r1cs_witness_index(outputs.0);
                         let out_y = self.fetch_r1cs_witness_index(outputs.1);
