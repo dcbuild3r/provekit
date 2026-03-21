@@ -158,15 +158,16 @@ impl MavrosCompiler {
             }
         }
 
-        let whir_for_witness = WhirR1CSScheme::new_from_mavros_r1cs(
+        let r1cs = convert_mavros_r1cs_to_provekit(&mavros_r1cs);
+
+        let mut whir_for_witness = WhirR1CSScheme::new_from_mavros_r1cs(
             &mavros_r1cs,
             mavros_r1cs.witness_layout.pre_commitment_size(),
             mavros_r1cs.witness_layout.challenges_size,
             num_public_inputs > 0,
             hash_config.engine_id(),
         );
-
-        let r1cs = convert_mavros_r1cs_to_provekit(&mavros_r1cs);
+        whir_for_witness.r1cs_hash = r1cs.hash();
 
         Ok(NoirProofScheme::Mavros(MavrosSchemeData {
             abi,
