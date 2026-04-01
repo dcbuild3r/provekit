@@ -14,7 +14,7 @@ fn main(
     sod_signature: [u8; 256],
     tbs_certificate: [u8; 1300],
     signed_attributes: SignedAttrsData,
-    signed_attributes_size: u64,
+    signed_attributes_size: u32,
     exponent: u32,
     e_content: EContentData,
 ) -> pub Field {
@@ -27,7 +27,7 @@ fn main(
             dsc_pubkey_redc_param,
             exponent,
             signed_attributes,
-            signed_attributes_size as u32,
+            signed_attributes_size,
             0,
         ),
         "RSA signature verification failed",
